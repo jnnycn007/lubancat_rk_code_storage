@@ -15,9 +15,13 @@
 
 程序运行前需要修改ws2812_app.c使用的实际引脚定义。
 
-编译应用程序后控制LED1的显示颜色，8个颜色循环显示：
+编译应用程序后需要先调整cpu为performance模式，将cpu频率设置为最高频率，然后才能运行程序控制LED的显示颜色
+
+如控制LED1的显示颜色，8个颜色循环显示：
 
 ```bash
+
+# sudo sh -c "echo performance > /sys/devices/system/cpu/cpufreq/policy0/scaling_governor"
 
 # ./ws2812_app 1
 

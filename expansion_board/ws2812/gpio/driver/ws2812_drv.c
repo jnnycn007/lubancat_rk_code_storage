@@ -79,8 +79,9 @@ static volatile unsigned int *GPIO_LEVEL_REG;
 struct ws2812_mes {
     unsigned int gpiochip;      		// data引脚的gpiochip
     unsigned int gpionum;       		// data引脚的gpionum
-    unsigned int lednum;        		// 要控制灯带的第几个LED，序号从1开始
-    unsigned char color[3];     		// color[0]:color[1]:color[2]	R:G:B
+    unsigned int lednum;        		// 起始LED序号，从1开始
+    unsigned int ledcount;      		// 要连续控制的LED数量
+    unsigned char color[LED_NUM_MAX][3];	// 每个LED的 R:G:B，color[i][0]=R [1]=G [2]=B
 };
 
 static int major = 0;
@@ -226,14 +227,28 @@ static ssize_t ws2812_drv_write(struct file *filp, const char __user * buf, size
 	printk("ws2812_usr.gpiochip : %d\n", ws2812_usr.gpiochip);
 	printk("ws2812_usr.gpionum : %d\n", ws2812_usr.gpionum);
 	printk("ws2812_usr.lednum : %d\n", ws2812_usr.lednum);
-	printk("ws2812_usr.color[0] : %d\n", ws2812_usr.color[0]);
-	printk("ws2812_usr.color[1] : %d\n", ws2812_usr.color[1]);
-	printk("ws2812_usr.color[2] : %d\n", ws2812_usr.color[2]);
+	printk("ws2812_usr.ledcount : %d\n", ws2812_usr.ledcount);
+	{
+		int k;
+		for(k = 0; k < ws2812_usr.ledcount; k++)
+			printk("color[%d] : R=%d G=%d B=%d\n", k,
+				ws2812_usr.color[k][0], ws2812_usr.color[k][1], ws2812_usr.color[k][2]);
+	}
 #endif
 
 	if(ws2812_usr.lednum < 1 || ws2812_usr.lednum > LED_NUM_MAX)
 	{
 		printk(KERN_ERR"ws2812.lednum must >= 1 && <= %d\n", LED_NUM_MAX);
+		return -1;
+	}
+	if(ws2812_usr.ledcount < 1 || ws2812_usr.ledcount > LED_NUM_MAX)
+	{
+		printk(KERN_ERR"ws2812.ledcount must >= 1 && <= %d\n", LED_NUM_MAX);
+		return -1;
+	}
+	if(ws2812_usr.lednum + ws2812_usr.ledcount - 1 > LED_NUM_MAX)
+	{
+		printk(KERN_ERR"ws2812.lednum + ledcount must <= %d\n", LED_NUM_MAX);
 		return -1;
 	}
 
@@ -250,10 +265,10 @@ static ssize_t ws2812_drv_write(struct file *filp, const char __user * buf, size
 	 * 第一个bit紧跟reset的udelay后立即拉高，不经过for循环判断/函数调用，
 	 * 消除~440ns开销导致的第一个码高电平超标。
 	 * 宏WRITE_FRAME_0/1编译时内联展开，无函数调用开销，所有bit开销一致。
-	 * 第一个byte = lednum>1 ? 0x00(填充) : color[G]
+	 * 第一个byte = (lednum>1) ? 0x00(填充) : color[0][G]
 	 */
 	{
-		unsigned char first_byte = (ws2812_usr.lednum > 1) ? 0x00 : ws2812_usr.color[1];
+		unsigned char first_byte = (ws2812_usr.lednum > 1) ? 0x00 : ws2812_usr.color[0][1];
 		int j;
 
 		/* 立即处理第一个bit，紧跟udelay，无循环/调用开销 */
@@ -275,26 +290,36 @@ static ssize_t ws2812_drv_write(struct file *filp, const char __user * buf, size
 	/* 发送剩余bytes */
 	if(ws2812_usr.lednum > 1)
 	{
-		/* 第一个LED剩余2字节(0x00, 0x00) */
+		/* 第一个填充LED剩余2字节(0x00, 0x00) */
 		ws2812_write_byte(0x00);
 		ws2812_write_byte(0x00);
-		/* 中间LED全部填黑 */
+		/* 中间填充LED全部填黑 (LED 2 ~ lednum-1) */
 		for(i = 2; i < ws2812_usr.lednum; i++)
 		{
 			ws2812_write_byte(0x00);
 			ws2812_write_byte(0x00);
 			ws2812_write_byte(0x00);
 		}
-		/* 最后一个LED填目标颜色 */
-		ws2812_write_byte(ws2812_usr.color[1]);		// color G
-		ws2812_write_byte(ws2812_usr.color[0]);		// color R
-		ws2812_write_byte(ws2812_usr.color[2]);		// color B
+		/* 目标LED：依次发送每个LED的 G R B */
+		for(i = 0; i < ws2812_usr.ledcount; i++)
+		{
+			ws2812_write_byte(ws2812_usr.color[i][1]);	// color G
+			ws2812_write_byte(ws2812_usr.color[i][0]);	// color R
+			ws2812_write_byte(ws2812_usr.color[i][2]);	// color B
+		}
 	}
 	else
 	{
-		/* lednum==1，只剩R和B两字节 */
-		ws2812_write_byte(ws2812_usr.color[0]);		// color R
-		ws2812_write_byte(ws2812_usr.color[2]);		// color B
+		/* lednum==1，第一个目标LED只剩R和B两字节 */
+		ws2812_write_byte(ws2812_usr.color[0][0]);		// color R
+		ws2812_write_byte(ws2812_usr.color[0][2]);		// color B
+		/* 剩余目标LED (LED 2 ~ ledcount) */
+		for(i = 1; i < ws2812_usr.ledcount; i++)
+		{
+			ws2812_write_byte(ws2812_usr.color[i][1]);	// color G
+			ws2812_write_byte(ws2812_usr.color[i][0]);	// color R
+			ws2812_write_byte(ws2812_usr.color[i][2]);	// color B
+		}
 	}
 
 	ws2812_reset();
